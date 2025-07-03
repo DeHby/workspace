@@ -126,19 +126,17 @@ public:
             other.callable = nullptr;
         }
     }
-    template<typename F,
-        typename T = typename std::decay<F>::type,
-        typename std::enable_if<!is_function_<T>::value, int>::type = 0,
-        typename std::enable_if<(callable_size<T>::value) > InlineSize), int>::type = 0>
+    template <typename F, typename T = typename std::decay<F>::type,
+              typename std::enable_if<!is_function_<T>::value, int>::type = 0,
+              typename std::enable_if<(callable_size<T>::value > InlineSize), int>::type = 0>
     function_(F&& f) {
         new (buffer) heap_callable_impl<T>(std::forward<F>(f));
         callable = reinterpret_cast<callable_base*>(&buffer);
     }
 
-    template<typename F,
-        typename T = typename std::decay<F>::type,
-        typename std::enable_if<!is_function_<T>::value, int>::type = 0,
-        typename std::enable_if<(callable_size<T>::value) <= InlineSize), int>::type = 0>
+    template <typename F, typename T = typename std::decay<F>::type,
+              typename std::enable_if<!is_function_<T>::value, int>::type = 0,
+              typename std::enable_if<(callable_size<T>::value <= InlineSize), int>::type = 0>
     function_(F&& f) {
         new (buffer) callable_impl<T>(std::forward<F>(f));
         callable = reinterpret_cast<callable_base*>(&buffer);
