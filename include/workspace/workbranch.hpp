@@ -5,7 +5,9 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <tuple>
 #include <workspace/autothread.hpp>
+#include <workspace/invoke.hpp>
 #include <workspace/taskqueue.hpp>
 #include <workspace/utility.hpp>
 
@@ -140,8 +142,12 @@ public:
      */
     template <typename T = normal, typename F, typename... Args, typename R = details::result_of_t<F, Args...>>
     auto submit(F&& task, Args&&... args) -> auto{
-        auto task_ptr = std::bind(std::forward<F>(task), std::forward<Args>(args)...);
-        return submit<T>(std::move(task_ptr));
+        auto args_tuple = std::make_tuple(std::forward<Args>(args)...);
+        auto task_lambda = [func = std::forward<F>(task), args_tuple = std::move(args_tuple)]() mutable -> R {
+            return invoke_hpp::apply(func, args_tuple);
+        };
+
+        return submit<T>(std::move(task_lambda));
     }
     /**
      * @brief async execute the task
@@ -152,7 +158,7 @@ public:
     template <typename T = normal, typename F, typename R = details::result_of_t<F>,
               typename DR = typename std::enable_if<std::is_void<R>::value>::type>
     auto submit(F&& task) -> typename std::enable_if<!std::is_same<T, sequence>::value>::type {
-        auto wrapper_task = [task] {
+        auto wrapper_task = [task = std::forward<F>(task)] {
             try {
                 task();
             } catch (const std::exception& ex) {
@@ -208,23 +214,18 @@ public:
               typename DR = typename std::enable_if<!std::is_void<R>::value, R>::type>
     auto submit(F&& task, typename std::enable_if<!std::is_same<T, sequence>::value, normal>::type = {})
         -> std::future<R> {
-        std::function<R()> exec(std::forward<F>(task));
-        std::shared_ptr<std::promise<R>> task_promise = std::make_shared<std::promise<R>>();
-
-        auto wrapper_task = [exec, task_promise] {
+        auto task_ptr = std::make_shared<std::packaged_task<R()>>(std::forward<F>(task));
+        auto future = task_ptr->get_future();
+        auto wrapper_task = [task = std::move(task_ptr)] {
             try {
-                task_promise->set_value(exec());
+                (*task)();
+            } catch (const std::exception& ex) {
+                std::cerr << "workspace: worker[" << std::this_thread::get_id()
+                          << "] caught exception:\n  what(): " << ex.what() << '\n'
+                          << std::flush;
             } catch (...) {
-                try {
-                    task_promise->set_exception(std::current_exception());
-                } catch (const std::exception& ex) {
-                    std::cerr << "workspace: worker[" << std::this_thread::get_id()
-                              << "] caught exception:\n  what(): " << ex.what() << '\n'
-                              << std::flush;
-                } catch (...) {
-                    std::cerr << "workspace: worker[" << std::this_thread::get_id() << "] caught unknown exception\n"
-                              << std::flush;
-                }
+                std::cerr << "workspace: worker[" << std::this_thread::get_id() << "] caught unknown exception\n"
+                          << std::flush;
             }
         };
 
@@ -236,7 +237,7 @@ public:
         }
 
         if (wait_strategy == waitstrategy::blocking) task_cv.notify_one();
-        return task_promise->get_future();
+        return future;
     }
 
 private:
