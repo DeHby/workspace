@@ -49,6 +49,11 @@ struct is_function_<function_<R, N>> : std::true_type {};
 template<typename R, typename... Args, size_t InlineSize>
 class function_<R(Args...), InlineSize> {
 private:
+    template <typename T>
+    struct callable_size {
+        static constexpr size_t value = sizeof(callable_impl<T>);
+    };
+
     struct callable_base {
         virtual R invoke(Args&&...) = 0;
         virtual void move_into(void* buffer) = 0;
@@ -124,7 +129,7 @@ public:
     template<typename F,
         typename T = typename std::decay<F>::type,
         typename std::enable_if<!is_function_<T>::value, int>::type = 0,
-        typename std::enable_if<(sizeof(callable_impl<T>) > InlineSize), int>::type = 0>
+        typename std::enable_if<(callable_size<T>::value) > InlineSize), int>::type = 0>
     function_(F&& f) {
         new (buffer) heap_callable_impl<T>(std::forward<F>(f));
         callable = reinterpret_cast<callable_base*>(&buffer);
@@ -133,7 +138,7 @@ public:
     template<typename F,
         typename T = typename std::decay<F>::type,
         typename std::enable_if<!is_function_<T>::value, int>::type = 0,
-        typename std::enable_if<(sizeof(callable_impl<T>) <= InlineSize), int>::type = 0>
+        typename std::enable_if<(callable_size<T>::value) <= InlineSize), int>::type = 0>
     function_(F&& f) {
         new (buffer) callable_impl<T>(std::forward<F>(f));
         callable = reinterpret_cast<callable_base*>(&buffer);

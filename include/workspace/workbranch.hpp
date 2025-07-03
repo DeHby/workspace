@@ -136,14 +136,23 @@ public:
 
 public:
     /**
+     * @brief Submit a task with arguments by binding them and forwarding to submit.
+     */
+    template <typename T = normal, typename F, typename... Args, typename R = details::result_of_t<F, Args...>>
+    auto submit(F&& task, Args&&... args) -> auto{
+        auto task_ptr = std::bind(std::forward<F>(task), std::forward<Args>(args)...);
+        return submit<T>(std::move(task_ptr));
+    }
+    /**
      * @brief async execute the task
+     * @tparam T Task priority tag: either `normal` (default) or `urgent`
      * @param task runnable object (normal)
      * @return void
      */
     template <typename T = normal, typename F, typename R = details::result_of_t<F>,
               typename DR = typename std::enable_if<std::is_void<R>::value>::type>
-    auto submit(F&& task) -> typename std::enable_if<std::is_same<T, normal>::value>::type {
-        tq.push_back([task] {
+    auto submit(F&& task) -> typename std::enable_if<!std::is_same<T, sequence>::value>::type {
+        auto wrapper_task = [task] {
             try {
                 task();
             } catch (const std::exception& ex) {
@@ -154,30 +163,15 @@ public:
                 std::cerr << "workspace: worker[" << std::this_thread::get_id() << "] caught unknown exception\n"
                           << std::flush;
             }
-        });  // function
-        if (wait_strategy == waitstrategy::blocking) task_cv.notify_one();
-    }
+        };
 
-    /**
-     * @brief async execute the task
-     * @param task runnable object (urgent)
-     * @return void
-     */
-    template <typename T, typename F, typename R = details::result_of_t<F>,
-              typename DR = typename std::enable_if<std::is_void<R>::value>::type>
-    auto submit(F&& task) -> typename std::enable_if<std::is_same<T, urgent>::value>::type {
-        tq.push_front([task] {
-            try {
-                task();
-            } catch (const std::exception& ex) {
-                std::cerr << "workspace: worker[" << std::this_thread::get_id()
-                          << "] caught exception:\n  what(): " << ex.what() << '\n'
-                          << std::flush;
-            } catch (...) {
-                std::cerr << "workspace: worker[" << std::this_thread::get_id() << "] caught unknown exception\n"
-                          << std::flush;
-            }
-        });
+        constexpr bool is_normal = std::is_same<T, normal>::value;
+        if (is_normal) {
+            tq.push_back(std::move(wrapper_task));
+        } else {
+            tq.push_front(std::move(wrapper_task));
+        }
+
         if (wait_strategy == waitstrategy::blocking) task_cv.notify_one();
     }
 
@@ -206,47 +200,18 @@ public:
 
     /**
      * @brief async execute the task
+     * @tparam T Task priority tag: either `normal` (default) or `urgent`
      * @param task runnable object (normal)
      * @return std::future<R>
      */
     template <typename T = normal, typename F, typename R = details::result_of_t<F>,
               typename DR = typename std::enable_if<!std::is_void<R>::value, R>::type>
-    auto submit(F&& task, typename std::enable_if<std::is_same<T, normal>::value, normal>::type = {})
+    auto submit(F&& task, typename std::enable_if<!std::is_same<T, sequence>::value, normal>::type = {})
         -> std::future<R> {
         std::function<R()> exec(std::forward<F>(task));
         std::shared_ptr<std::promise<R>> task_promise = std::make_shared<std::promise<R>>();
-        tq.push_back([exec, task_promise] {
-            try {
-                task_promise->set_value(exec());
-            } catch (...) {
-                try {
-                    task_promise->set_exception(std::current_exception());
-                } catch (const std::exception& ex) {
-                    std::cerr << "workspace: worker[" << std::this_thread::get_id()
-                              << "] caught exception:\n  what(): " << ex.what() << '\n'
-                              << std::flush;
-                } catch (...) {
-                    std::cerr << "workspace: worker[" << std::this_thread::get_id() << "] caught unknown exception\n"
-                              << std::flush;
-                }
-            }
-        });
-        if (wait_strategy == waitstrategy::blocking) task_cv.notify_one();
-        return task_promise->get_future();
-    }
 
-    /**
-     * @brief async execute the task
-     * @param task runnable object (urgent)
-     * @return std::future<R>
-     */
-    template <typename T, typename F, typename R = details::result_of_t<F>,
-              typename DR = typename std::enable_if<!std::is_void<R>::value, R>::type>
-    auto submit(F&& task, typename std::enable_if<std::is_same<T, urgent>::value, urgent>::type = {})
-        -> std::future<R> {
-        std::function<R()> exec(std::forward<F>(task));
-        std::shared_ptr<std::promise<R>> task_promise = std::make_shared<std::promise<R>>();
-        tq.push_front([exec, task_promise] {
+        auto wrapper_task = [exec, task_promise] {
             try {
                 task_promise->set_value(exec());
             } catch (...) {
@@ -261,7 +226,15 @@ public:
                               << std::flush;
                 }
             }
-        });
+        };
+
+        constexpr bool is_normal = std::is_same<T, normal>::value;
+        if (is_normal) {
+            tq.push_back(std::move(wrapper_task));
+        } else {
+            tq.push_front(std::move(wrapper_task));
+        }
+
         if (wait_strategy == waitstrategy::blocking) task_cv.notify_one();
         return task_promise->get_future();
     }
