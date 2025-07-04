@@ -201,7 +201,7 @@ enum class waitstrategy {
 supervisor是异步管理者线程的抽象，负责监控workbranch的负载情况并进行动态调整。它允许你在每一次调控workbranch之后执行一个小任务，你可以用来**写日志**或者做一些其它调控等。
 <br>
 
-每一个supervisor可以管理多个workbranch。此时workbranch之间共享supervisor的所有设定。
+每一个supervisor可以管理多个workbranch。不同的workbranch可以选择使用supervisor的默认设定或独立设定
 
 ```c++
 #include <workspace/workspace.hpp>
@@ -225,7 +225,7 @@ int main() {
     });
 
     sp.supervise(br1);  // start supervising
-    sp.supervise(br2);  // start supervising
+    sp.supervise(br2, 20, 100);  // customize the settings
 
     for (int i = 0; i < 1000; ++i) {
         br1.submit([]{std::this_thread::sleep_for(std::chrono::milliseconds(10));});
