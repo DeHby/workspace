@@ -28,6 +28,7 @@ private:
 
     std::mutex spv_lok;
     std::condition_variable thrd_cv;
+
     autothread<join> worker;
     std::vector<workbranch*> branches;
 

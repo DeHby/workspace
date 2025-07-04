@@ -171,12 +171,7 @@ public:
             }
         };
 
-        constexpr bool is_normal = std::is_same<T, normal>::value;
-        if (is_normal) {
-            tq.push_back(std::move(wrapper_task));
-        } else {
-            tq.push_front(std::move(wrapper_task));
-        }
+        add_task<T>(std::move(wrapper_task));
 
         if (wait_strategy == waitstrategy::blocking) task_cv.notify_one();
     }
@@ -229,18 +224,23 @@ public:
             }
         };
 
-        constexpr bool is_normal = std::is_same<T, normal>::value;
-        if (is_normal) {
-            tq.push_back(std::move(wrapper_task));
-        } else {
-            tq.push_front(std::move(wrapper_task));
-        }
+        add_task<T>(std::move(wrapper_task));
 
         if (wait_strategy == waitstrategy::blocking) task_cv.notify_one();
         return future;
     }
 
 private:
+    template <typename T, typename Task>
+    typename std::enable_if<std::is_same<T, normal>::value>::type add_task(Task&& task) {
+        tq.push_back(std::forward<Task>(task));
+    }
+
+    template <typename T, typename Task>
+    typename std::enable_if<!std::is_same<T, normal>::value>::type add_task(Task&& task) {
+        tq.push_front(std::forward<Task>(task));
+    }
+
     // thread's default loop
     void mission() {
         task_t task;
