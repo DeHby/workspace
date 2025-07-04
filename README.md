@@ -57,14 +57,20 @@ int main() {
     br.submit([]{ std::cout<<"hello world"<<std::endl; });  
     // return std::future<int>
     auto result = br.submit([]{ return 2023; });  
-    std::cout<<"Got "<<result.get()<<std::endl;   
+    std::cout<<"Got "<<result.get()<<std::endl;
+    int a = 1;  
+    br.submit([](int& a, int b) {a = 10; return a + b; }, std::ref(a), 90).wait();
+    // a == 10
+
     // wait for tasks done (timeout: 1000 milliseconds)
     br.wait_tasks(1000); 
 }
 ```
 
-由于返回一个std::future会带来一定的开销，如果你不需要返回值并且希望程序跑得更快，那么你的任务应该是`void()`类型的。
-<br>
+由于返回一个std::future会带来一定的开销，如果你不需要返回值并且希望程序跑得更快，那么你的任务应该是`void()`类型的，如果你希望即使任务类型是`void()`类型也要处理返回的std::future，那么你可以使用`submit_future`
+```C++
+auto ret = br.submit_future([]() {});
+```
 
 当你有一个任务并且你希望它能尽快被执行时，你可以指定该任务的类型为`urgent`，如下：
 
@@ -109,7 +115,7 @@ int main() {
 任务序列会被打包成一个较大的任务，以此来减轻框架同步任务的负担，提高整体的并发性能。
 <br>
 
-当任务中抛出了一个异常，workbranch有两种处理方式：A-将其捕获并输出到终端 B-将其捕获并通过std::future传递到主线程。第二种需要你提交一个**带返回值**的任务。
+当任务中抛出了一个异常，workbranch有两种处理方式：第一种 A-将其捕获并输出到终端 B-将其捕获并通过std::future传递到主线程。第二种需要你提交一个**带返回值**的任务。第三种不论函数是否有返回值都通过std::future处理返回值。
 ```C++
 #include <workspace/workspace.hpp>
 // self-defined
@@ -155,7 +161,7 @@ Caught error: YYYY
 ```
 
 
-此外，workbranch在工作线程空闲时可以设置三种不同的**等待策略**：
+此外，workbranch在工作线程空闲时可以设置三种不同的**等待策略**（默认blocking）：
 ```cpp
 enum class waitstrategy {
     lowlatancy,  // Busy-wait with std::this_thread::yield(), minimal latency.
