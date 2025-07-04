@@ -207,12 +207,12 @@ public:
     /**
      * @brief async execute the task
      * @tparam T Task priority tag: either `normal` (default) or `urgent`
-     * @param task runnable object (normal)
+     * @param task runnable object
      * @return std::future<R>
      */
     template <typename T = normal, typename F, typename R = details::result_of_t<F>,
               typename DR = typename std::enable_if<!std::is_void<R>::value, R>::type>
-    auto submit(F&& task, typename std::enable_if<!std::is_same<T, sequence>::value, normal>::type = {})
+    auto submit(F&& task, typename std::enable_if<!std::is_same<T, sequence>::value, sequence>::type = {})
         -> std::future<R> {
         auto task_ptr = std::make_shared<std::packaged_task<R()>>(std::forward<F>(task));
         auto future = task_ptr->get_future();
