@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include <condition_variable>
 #include <cstdlib>
 #include <future>
@@ -112,9 +112,7 @@ public:
         thread_cv.notify_all();  // recover
 
         std::unique_lock<std::mutex> locker(lok);
-        waiting_finished.wait(locker, [this] {
-            return waiting_finished_worker >= workers.size();
-        });
+        waiting_finished.wait(locker, [this] { return waiting_finished_worker >= workers.size(); });
         waiting_finished_worker = 0;
         return res;
     }
@@ -139,9 +137,11 @@ public:
 public:
     /**
      * @brief Submit a task with arguments by binding them and forwarding to submit.
+     * @param task Callable object.
+     * @param args Arguments for the callable.
      */
     template <typename T = normal, typename F, typename... Args, typename R = details::result_of_t<F, Args...>>
-    auto submit(F&& task, Args&&... args) -> auto{
+    auto submit(F&& task, Args&&... args) -> auto {
         auto args_tuple = std::make_tuple(std::forward<Args>(args)...);
         auto task_lambda = [func = std::forward<F>(task), args_tuple = std::move(args_tuple)]() mutable -> R {
             return invoke_hpp::apply(func, args_tuple);
@@ -230,6 +230,49 @@ public:
         return future;
     }
 
+    /**
+     * @brief submit a task asynchronously and always return a std::future,
+     *        even if the task returns void.
+     *
+     * This function wraps the task and its arguments, runs it asynchronously,
+     * and returns a future for its result.
+     *
+     * @tparam T Task priority tag: either `normal` (default) or `urgent`
+     * @param task Callable object.
+     * @param args Arguments for the callable.
+     * @return std::future<R>
+     *
+     */
+    template <typename T = normal, typename F, typename... Args, typename R = details::result_of_t<F, Args...>,
+              typename = std::enable_if_t<!std::is_same<T, sequence>::value>>
+    std::future<R> submit_future(F&& task, Args&&... args) {
+        auto args_tuple = std::make_tuple(std::forward<Args>(args)...);
+        auto task_lambda = [func = std::forward<F>(task), args_tuple = std::move(args_tuple)]() mutable -> R {
+            return invoke_hpp::apply(func, args_tuple);
+        };
+        auto task_ptr = std::make_shared<std::packaged_task<R()>>(std::move(task_lambda));
+        auto future = task_ptr->get_future();
+
+        auto wrapper_task = [task_ptr = std::move(task_ptr)] {
+            try {
+                (*task_ptr)();
+            } catch (const std::exception& ex) {
+                std::cerr << "workspace: worker[" << std::this_thread::get_id()
+                          << "] caught exception:\n  what(): " << ex.what() << '\n'
+                          << std::flush;
+            } catch (...) {
+                std::cerr << "workspace: worker[" << std::this_thread::get_id() << "] caught unknown exception\n"
+                          << std::flush;
+            }
+        };
+
+        add_task<T>(std::move(wrapper_task));
+
+        if (wait_strategy == waitstrategy::blocking) task_cv.notify_one();
+
+        return future;
+    }
+
 private:
     template <typename T, typename Task>
     typename std::enable_if<std::is_same<T, normal>::value>::type add_task(Task&& task) {
@@ -264,9 +307,8 @@ private:
                     task_done_workers++;
                     task_done_cv.notify_one();
                     thread_cv.wait(locker, [this] { return !is_waiting; });
-                    waiting_finished_worker ++;
-                    if (waiting_finished_worker >= workers.size())
-                        waiting_finished.notify_one();
+                    waiting_finished_worker++;
+                    if (waiting_finished_worker >= workers.size()) waiting_finished.notify_one();
                 } else {
                     switch (wait_strategy) {
                         case waitstrategy::lowlatancy: {

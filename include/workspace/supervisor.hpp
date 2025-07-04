@@ -1,5 +1,6 @@
 #pragma once
 #include <cassert>
+#include <cmath>
 #include <condition_variable>
 #include <iomanip>
 #include <iostream>
@@ -11,26 +12,33 @@
 
 namespace wsp {
 namespace details {
-
+struct cpu_multiple_tag_t {};
+constexpr static cpu_multiple_tag_t cpu_multiple_tag{};
 // workbranch supervisor
 class supervisor {
     using tick_callback_t = std::function<void()>;
 
 private:
-    bool stop = false;
+    struct BranchLimits {
+        workbranch* branch;
+        size_t min;
+        size_t max;
+    };
+
+    std::atomic<bool> stop = false;
 
     size_t wmin = 0;
     size_t wmax = 0;
     unsigned tout = 0;
     const unsigned tval = 0;
 
-    tick_callback_t tick_cb = {};
+    tick_callback_t tick_cb;
 
     std::mutex spv_lok;
     std::condition_variable thrd_cv;
 
     autothread<join> worker;
-    std::vector<workbranch*> branches;
+    std::vector<BranchLimits> branches;
 
 public:
     /**
@@ -44,10 +52,39 @@ public:
       , wmax(max_wokrs)
       , tout(time_interval)
       , tval(time_interval)
-      , tick_cb([] {})
+      , tick_cb(nullptr)
       , worker(std::thread(&supervisor::mission, this)) {
         assert(min_wokrs >= 0 && max_wokrs > 0 && max_wokrs > min_wokrs);
     }
+
+    /**
+     * @brief construct a supervisor with default min/max based on hardware concurrency
+     * @param time_interval interval (ms) between each supervision check
+     */
+    explicit supervisor(unsigned time_interval = 500)
+      : wmin(1)
+      , wmax(std::thread::hardware_concurrency())
+      , tout(time_interval)
+      , tval(time_interval)
+      , tick_cb(nullptr)
+      , worker(std::thread(&supervisor::mission, this)) {
+        assert(wmin >= 0 && wmax > 0 && wmax > wmin);
+    }
+
+    /**
+     * @brief construct supervisor using cpu core multiples
+     * @param tag tag type for dispatch
+     * @param minCoreMultiple multiple of min workers
+     * @param maxCoreMultiple multiple of max workers
+     * @param time_interval interval (ms) between each supervision check
+     */
+    explicit supervisor(cpu_multiple_tag_t, double minCoreMultiple, double maxCoreMultiple,
+                        unsigned time_interval = 500)
+      : supervisor(static_cast<int>(std::ceil(std::max(1u, std::thread::hardware_concurrency()) * minCoreMultiple)),
+                   static_cast<int>(std::ceil(std::max(1u, std::thread::hardware_concurrency()) * maxCoreMultiple)),
+                   time_interval) {
+    }
+
     supervisor(const supervisor&) = delete;
     supervisor(supervisor&&) = delete;
     ~supervisor() {
@@ -60,22 +97,40 @@ public:
 
 public:
     /**
-     * @brief start supervising a workbranch
-     * @param wbr reference of workbranch
+     * @brief start supervising a workbranch with specified min and max workers
+     * @param wbr Reference to the workbranch to supervise
+     * @param min_wokrs min nums of workers
+     * @param max_wokrs max nums of workers
+     */
+    void supervise(workbranch& wbr, int min_wokrs, int max_wokrs) {
+        std::lock_guard<std::mutex> lock(spv_lok);
+
+        BranchLimits branch;
+        branch.branch = &wbr;
+        branch.min = min_wokrs;
+        branch.max = max_wokrs;
+        branches.emplace_back(std::move(branch));
+    }
+
+    /**
+     * @brief start supervising a workbranch with default min/max workers
+     * @param wbr Reference to the workbranch to supervise
+     *
+     * Uses the supervisor's default min/max worker limits.
      */
     void supervise(workbranch& wbr) {
-        std::lock_guard<std::mutex> lock(spv_lok);
-        branches.emplace_back(&wbr);
+        supervise(wbr, static_cast<int>(wmin), static_cast<int>(wmax));
     }
 
     /**
      * @brief suspend the supervisor
      * @param timeout the longest waiting time
      */
-    void suspend(unsigned timeout = -1) {
+    void suspend(unsigned timeout = std::numeric_limits<unsigned>::max()) {
         std::lock_guard<std::mutex> lock(spv_lok);
         tout = timeout;
     }
+
     // go on supervising
     void proceed() {
         {
@@ -84,6 +139,7 @@ public:
         }
         thrd_cv.notify_one();
     }
+
     /**
      * @brief Always execute callback before taking a rest
      * @param cb callback function
@@ -100,23 +156,24 @@ private:
                 {
                     std::unique_lock<std::mutex> lock(spv_lok);
                     for (auto pbr : branches) {
+                        auto& branch = pbr.branch;
                         // get info
-                        auto tknums = pbr->num_tasks();
-                        auto wknums = pbr->num_workers();
+                        auto tknums = branch->num_tasks();
+                        auto wknums = branch->num_workers();
                         // adjust
                         if (tknums) {
-                            assert(wknums <= wmax);  // Avoid wrong usage
-                            size_t nums = std::min(wmax - wknums, tknums - wknums);
+                            assert(wknums <= pbr.max);  // Avoid wrong usage
+                            size_t nums = std::min(pbr.max - wknums, tknums - wknums);
                             for (size_t i = 0; i < nums; ++i) {
-                                pbr->add_worker();  // quick add
+                                branch->add_worker();  // quick add
                             }
-                        } else if (wknums > wmin) {
-                            pbr->del_worker();  // slow dec
+                        } else if (wknums > pbr.min) {
+                            branch->del_worker();  // slow dec
                         }
                     }
                     if (!stop) thrd_cv.wait_for(lock, std::chrono::milliseconds(tout));
                 }
-                tick_cb();  // execute tick callback
+                if (tick_cb) tick_cb();  // execute tick callback
 
             } catch (const std::exception& e) {
                 std::cerr << "workspace: supervisor[" << std::this_thread::get_id() << "] caught exception:\n  \

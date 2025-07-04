@@ -1,11 +1,11 @@
-#pragma once
-#include <cstdlib>
+﻿#pragma once
 #include <cstddef>
-#include <utility>
+#include <cstdlib>
 #include <deque>
 #include <functional>
 #include <future>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace wsp {
@@ -37,16 +37,16 @@ struct sequence {};  // sequence tasks (for type inference)
 
 // function_: try to avoid heap allocation
 
-template<typename Signature, size_t InlineSize = 64 - sizeof(void*)>
+template <typename Signature, size_t InlineSize = 64 - sizeof(void*)>
 class function_;
 
-template<typename T>
+template <typename T>
 struct is_function_ : std::false_type {};
 
-template<typename R, size_t N>
+template <typename R, size_t N>
 struct is_function_<function_<R, N>> : std::true_type {};
 
-template<typename R, typename... Args, size_t InlineSize>
+template <typename R, typename... Args, size_t InlineSize>
 class function_<R(Args...), InlineSize> {
 private:
     template <typename T>
@@ -61,12 +61,14 @@ private:
         virtual ~callable_base() = default;
     };
 
-    template<typename F>
+    template <typename F>
     struct callable_impl : callable_base {
         F f;
 
-        template<typename U>
-        callable_impl(U&& fn) : f(std::forward<U>(fn)) {}
+        template <typename U>
+        callable_impl(U&& fn)
+          : f(std::forward<U>(fn)) {
+        }
 
         R invoke(Args&&... args) override {
             return f(std::forward<Args>(args)...);
@@ -79,13 +81,16 @@ private:
         }
     };
 
-    template<typename F>
+    template <typename F>
     struct heap_callable_impl : callable_base {
         F* pf;
 
-        heap_callable_impl() : pf(nullptr) {} ;
-        template<typename U>
-        heap_callable_impl(U&& fn) : pf(new F(std::forward<U>(fn))) {}
+        heap_callable_impl()
+          : pf(nullptr) {};
+        template <typename U>
+        heap_callable_impl(U&& fn)
+          : pf(new F(std::forward<U>(fn))) {
+        }
 
         heap_callable_impl(const heap_callable_impl&) = delete;
         heap_callable_impl& operator=(const heap_callable_impl&) = delete;
@@ -93,7 +98,9 @@ private:
         heap_callable_impl(heap_callable_impl&&) = default;
         heap_callable_impl& operator=(heap_callable_impl&&) = default;
 
-        ~heap_callable_impl() {  delete pf; }
+        ~heap_callable_impl() {
+            delete pf;
+        }
 
         R invoke(Args&&... args) override {
             return (*pf)(std::forward<Args>(args)...);
@@ -112,7 +119,8 @@ public:
     static constexpr size_t inline_size = InlineSize;
 
     function_() = default;
-    function_(std::nullptr_t) {}
+    function_(std::nullptr_t) {
+    }
     function_(const function_& other) {
         if (other.callable) {
             other.callable->clone_into(buffer);
@@ -181,8 +189,7 @@ public:
     }
 
     R operator()(Args... args) const {
-        if (!callable)
-            throw std::bad_function_call();
+        if (!callable) throw std::bad_function_call();
         return callable->invoke(std::forward<Args>(args)...);
     }
 

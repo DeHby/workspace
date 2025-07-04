@@ -220,16 +220,16 @@ public:
      * @tparam T task type
      * @param task runnable object
      */
-    template <typename T = task::nor, typename F, typename R = details::result_of_t<F>,
+    template <typename T = task::nor, typename F, typename... Args, typename R = details::result_of_t<F, Args...>,
               typename DR = typename std::enable_if<std::is_void<R>::value>::type>
-    void submit(F&& task) {
+    void submit(F&& task, Args&&... args) {
         assert(branches.size() > 0);
         auto this_br = cur->get();
         auto next_br = forward(cur)->get();
         if (next_br->num_tasks() < this_br->num_tasks()) {
-            next_br->submit<T>(std::forward<F>(task));
+            next_br->submit<T>(std::forward<F>(task), std::forward<Args>(args)...);
         } else {
-            this_br->submit<T>(std::forward<F>(task));
+            this_br->submit<T>(std::forward<F>(task), std::forward<Args>(args)...);
         }
     }
     /**
@@ -239,18 +239,42 @@ public:
      * @param task runnable object
      * @return std::future<R>
      */
-    template <typename T = task::nor, typename F, typename R = details::result_of_t<F>,
+    template <typename T = task::nor, typename F, typename... Args, typename R = details::result_of_t<F, Args...>,
               typename DR = typename std::enable_if<!std::is_void<R>::value, R>::type>
-    auto submit(F&& task) -> std::future<R> {
+    auto submit(F&& task, Args&&... args) -> std::future<R> {
         assert(branches.size() > 0);
         auto this_br = cur->get();
         auto next_br = forward(cur)->get();
         if (next_br->num_tasks() < this_br->num_tasks()) {
-            return next_br->submit<T>(std::forward<F>(task));
+            return next_br->submit<T>(std::forward<F>(task), std::forward<Args>(args)...);
         } else {
-            return this_br->submit<T>(std::forward<F>(task));
+            return this_br->submit<T>(std::forward<F>(task), std::forward<Args>(args)...);
         }
     }
+    /**
+     * @brief async execute a task and always return std::future
+     * @tparam T task type
+     * @tparam R task's return type
+     * @param task runnable object
+     * @param args arguments for the task
+     * @return std::future<R>
+     *
+     * Unlike submit, this interface always returns a future,
+     * even if the task has void return type.
+     */
+    template <typename T = task::nor, typename F, typename... Args, typename R = details::result_of_t<F, Args...>,
+              typename DR = typename std::enable_if<!std::is_void<R>::value, R>::type>
+    auto submit_future(F&& task, Args&&... args) -> std::future<R> {
+        assert(branches.size() > 0);
+        auto this_br = cur->get();
+        auto next_br = forward(cur)->get();
+        if (next_br->num_tasks() < this_br->num_tasks()) {
+            return next_br->submit_future<T>(std::forward<F>(task), std::forward<Args>(args)...);
+        } else {
+            return this_br->submit_future<T>(std::forward<F>(task), std::forward<Args>(args)...);
+        }
+    }
+
     /**
      * @brief async execute tasks
      * @param task runnable object (sequnce)
