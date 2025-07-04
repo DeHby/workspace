@@ -16,10 +16,15 @@ class autothread<join> {
     std::thread thrd;
 
 public:
+    template <typename F, typename... Args>
+    explicit autothread(F&& f, Args&&... args)
+      : thrd(std::forward<F>(f), std::forward<Args>(args)...) {
+    }
+
     autothread(std::thread&& t)
       : thrd(std::move(t)) {
     }
-    autothread(const autothread& other) = delete;
+
     autothread(autothread&& other) = default;
     ~autothread() {
         if (thrd.joinable()) thrd.join();
@@ -36,6 +41,11 @@ class autothread<detach> {
     std::thread thrd;
 
 public:
+    template <typename F, typename... Args>
+    autothread(F&& f, Args&&... args)
+      : thrd(std::forward<F>(f), std::forward<Args>(args)...) {
+    }
+
     autothread(std::thread&& t)
       : thrd(std::move(t)) {
     }

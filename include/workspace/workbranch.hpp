@@ -1,4 +1,5 @@
 ﻿#pragma once
+#include <atomic>
 #include <condition_variable>
 #include <cstdlib>
 #include <future>
@@ -23,8 +24,10 @@ enum class waitstrategy {
 namespace details {
 
 class workbranch {
-    using worker = autothread<detach>;
-    using worker_map = std::map<worker::id, worker>;
+    using worker_id = uintmax_t;
+    using worker_map = std::map<worker_id, autothread<detach>>;
+
+    std::atomic<worker_id> worker_next_id = 0;
 
     const int max_spin_count = 10000;
     waitstrategy wait_strategy = {};
@@ -73,8 +76,8 @@ public:
      */
     void add_worker() {
         std::lock_guard<std::mutex> lock(lok);
-        std::thread t(&workbranch::mission, this);
-        workers.emplace(t.get_id(), std::move(t));
+        auto worker_id = worker_next_id.fetch_add(1);
+        workers.try_emplace(worker_id, &workbranch::mission, this, worker_id);
     }
 
     /**
@@ -158,7 +161,7 @@ public:
     template <typename T = normal, typename F, typename R = details::result_of_t<F>,
               typename DR = typename std::enable_if<std::is_void<R>::value>::type>
     auto submit(F&& task) -> typename std::enable_if<!std::is_same<T, sequence>::value>::type {
-        auto wrapper_task = [task = std::forward<F>(task)] {
+        auto wrapper_task = [task = std::forward<F>(task)]() mutable {
             try {
                 task();
             } catch (const std::exception& ex) {
@@ -285,7 +288,7 @@ private:
     }
 
     // thread's default loop
-    void mission() {
+    void mission(worker_id id) {
         task_t task;
         int spin_count = 0;
 
@@ -296,7 +299,7 @@ private:
             } else if (decline > 0) {
                 std::lock_guard<std::mutex> lock(lok);
                 if (decline > 0 && decline--) {  // double check
-                    workers.erase(std::this_thread::get_id());
+                    workers.erase(id);
                     if (is_waiting) task_done_cv.notify_one();
                     if (destructing) thread_cv.notify_one();
                     return;

@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <condition_variable>
@@ -37,7 +38,7 @@ private:
     std::mutex spv_lok;
     std::condition_variable thrd_cv;
 
-    autothread<join> worker;
+    std::unique_ptr<autothread<join>> worker;
     std::vector<BranchLimits> branches;
 
 public:
@@ -52,9 +53,9 @@ public:
       , wmax(max_wokrs)
       , tout(time_interval)
       , tval(time_interval)
-      , tick_cb(nullptr)
-      , worker(std::thread(&supervisor::mission, this)) {
+      , tick_cb(nullptr) {
         assert(min_wokrs >= 0 && max_wokrs > 0 && max_wokrs > min_wokrs);
+        worker = std::make_unique<autothread<join>>(&supervisor::mission, this);
     }
 
     /**
@@ -62,13 +63,7 @@ public:
      * @param time_interval interval (ms) between each supervision check
      */
     explicit supervisor(unsigned time_interval = 500)
-      : wmin(1)
-      , wmax(std::thread::hardware_concurrency())
-      , tout(time_interval)
-      , tval(time_interval)
-      , tick_cb(nullptr)
-      , worker(std::thread(&supervisor::mission, this)) {
-        assert(wmin >= 0 && wmax > 0 && wmax > wmin);
+      : supervisor(1, std::max(2u, std::thread::hardware_concurrency()), time_interval) {
     }
 
     /**
@@ -123,6 +118,20 @@ public:
     }
 
     /**
+     * @brief start supervising a workbranch with worker limits based on CPU cores
+     * @param wbr Reference to the workbranch to supervise
+     * @param tag Tag to indicate CPU core scaling mode
+     * @param minCoreMultiple min workers = ceil(cores * minCoreMultiple)
+     * @param maxCoreMultiple max workers = ceil(cores * maxCoreMultiple)
+     */
+    void supervise(workbranch& wbr, cpu_multiple_tag_t, double minCoreMultiple, double maxCoreMultiple) {
+        auto cores = (std::max)(1u, std::thread::hardware_concurrency());
+        int min = static_cast<int>(std::ceil(cores * minCoreMultiple));
+        int max = static_cast<int>(std::ceil(cores * maxCoreMultiple));
+        supervise(wbr, min, max);
+    }
+
+    /**
      * @brief suspend the supervisor
      * @param timeout the longest waiting time
      */
@@ -155,7 +164,7 @@ private:
             try {
                 {
                     std::unique_lock<std::mutex> lock(spv_lok);
-                    for (auto pbr : branches) {
+                    for (auto& pbr : branches) {
                         auto& branch = pbr.branch;
                         // get info
                         auto tknums = branch->num_tasks();
