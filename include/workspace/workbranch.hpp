@@ -48,9 +48,9 @@ public:
     /**
      * @brief construct function
      * @param wks initial number of workers
-     * @param strategy wait_strategy for workers (defaults to lowlatancy).
+     * @param strategy wait_strategy for workers (defaults to blocking).
      */
-    explicit workbranch(int wks = 1, waitstrategy strategy = waitstrategy::lowlatancy) {
+    explicit workbranch(int wks = 1, waitstrategy strategy = waitstrategy::blocking) {
         wait_strategy = strategy;
         for (int i = 0; i < std::max(wks, 1); ++i) {
             add_worker();  // worker
