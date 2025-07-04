@@ -26,10 +26,10 @@ private:
 
     tick_callback_t tick_cb = {};
 
+    std::mutex spv_lok;
+    std::condition_variable thrd_cv;
     autothread<join> worker;
     std::vector<workbranch*> branches;
-    std::condition_variable thrd_cv;
-    std::mutex spv_lok;
 
 public:
     /**
