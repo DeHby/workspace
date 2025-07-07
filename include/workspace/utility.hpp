@@ -73,9 +73,11 @@ private:
         R invoke(Args&&... args) override {
             return f(std::forward<Args>(args)...);
         }
+
         void move_into(void* buffer) override {
             new (buffer) callable_impl(std::move(f));
         }
+
         void clone_into(void* buffer) const override {
             new (buffer) callable_impl(f);
         }
@@ -87,6 +89,7 @@ private:
 
         heap_callable_impl()
           : pf(nullptr) {};
+
         template <typename U>
         heap_callable_impl(U&& fn)
           : pf(new F(std::forward<U>(fn))) {
@@ -105,11 +108,13 @@ private:
         R invoke(Args&&... args) override {
             return (*pf)(std::forward<Args>(args)...);
         }
+
         void move_into(void* buffer) override {
             auto pc = new (buffer) heap_callable_impl();
             pc->pf = pf;
             pf = nullptr;
         }
+
         void clone_into(void* buffer) const override {
             new (buffer) heap_callable_impl(*pf);
         }
@@ -119,14 +124,17 @@ public:
     static constexpr size_t inline_size = InlineSize;
 
     function_() = default;
+
     function_(std::nullptr_t) {
     }
+
     function_(const function_& other) {
         if (other.callable) {
             other.callable->clone_into(buffer);
             callable = reinterpret_cast<callable_base*>(&buffer);
         }
     }
+
     function_(function_&& other) noexcept {
         if (other.callable) {
             other.callable->move_into(buffer);
@@ -134,6 +142,7 @@ public:
             other.callable = nullptr;
         }
     }
+
     template <typename F, typename T = typename std::decay<F>::type,
               typename std::enable_if<!is_function_<T>::value, int>::type = 0,
               typename std::enable_if<(callable_size<T>::value > InlineSize), int>::type = 0>
@@ -214,12 +223,13 @@ public:
     using iterator = typename std::deque<std::future<T>>::iterator;
 
     // wait for all futures
-    void wait() {
+    void wait() const {
         for (auto& each : futs) {
             each.wait();
         }
     }
-    size_t size() {
+
+    size_t size() const {
         return futs.size();
     }
     /**
@@ -255,16 +265,19 @@ public:
             deal(each);
         }
     }
+
     void for_each(const iterator& first, std::function<void(std::future<T>&)> deal) {
         for (auto it = first; it != end(); ++it) {
             deal(*it);
         }
     }
+
     void for_each(const iterator& first, const iterator& last, std::function<void(std::future<T>&)> deal) {
         for (auto it = first; it != last; ++it) {
             deal(*it);
         }
     }
+
     auto operator[](size_t idx) -> std::future<T>& {
         return futs[idx];
     }

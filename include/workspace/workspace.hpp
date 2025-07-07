@@ -93,10 +93,12 @@ private:
 
 public:
     explicit workspace() = default;
+
     ~workspace() {
         supervs.clear();
         branches.clear();
     }
+
     workspace(const workspace&) = delete;
     workspace(workspace&&) = delete;
 
@@ -141,6 +143,7 @@ public:
         }
         return nullptr;
     }
+
     /**
      * @brief detach supervisor by id
      * @param id supervisor's id
@@ -167,6 +170,7 @@ public:
             deal(*(each.get()));
         }
     }
+
     /**
      * @brief travel all the supervisors and deal each them
      * @param deal <void(supervisor&)> how to deal with the supervisor
@@ -186,6 +190,7 @@ public:
     auto operator[](bid id) -> workbranch& {
         return (*id.base);
     }
+
     /**
      * @brief get ref of supervisor by id
      * @param id supervisor's id
@@ -205,6 +210,7 @@ public:
     auto get_ref(bid id) -> workbranch& {
         return *id.base;
     }
+
     /**
      * @brief get reference of supervisor
      * @param id supervisor's id
@@ -232,6 +238,7 @@ public:
             this_br->submit<T>(std::forward<F>(task), std::forward<Args>(args)...);
         }
     }
+
     /**
      * @brief async execute a task
      * @tparam T task type
@@ -251,6 +258,7 @@ public:
             return this_br->submit<T>(std::forward<F>(task), std::forward<Args>(args)...);
         }
     }
+
     /**
      * @brief async execute a task and always return std::future
      * @tparam T task type

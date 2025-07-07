@@ -13,7 +13,7 @@ namespace details {
  */
 template <typename T>
 class taskqueue {
-    std::mutex tq_lok;
+    mutable std::mutex tq_lok;
     std::deque<T> q;
 
 public:
@@ -27,18 +27,22 @@ public:
         std::lock_guard<std::mutex> lock(tq_lok);
         q.emplace_back(v);
     }
+
     void push_back(T&& v) {
         std::lock_guard<std::mutex> lock(tq_lok);
         q.emplace_back(std::move(v));
     }
+
     void push_front(T& v) {
         std::lock_guard<std::mutex> lock(tq_lok);
         q.emplace_front(v);
     }
+
     void push_front(T&& v) {
         std::lock_guard<std::mutex> lock(tq_lok);
         q.emplace_front(std::move(v));
     }
+
     bool try_pop(T& tmp) {
         std::lock_guard<std::mutex> lock(tq_lok);
         if (!q.empty()) {
@@ -48,7 +52,8 @@ public:
         }
         return false;
     }
-    size_type length() {
+
+    size_type length() const {
         std::lock_guard<std::mutex> lock(tq_lok);
         return q.size();
     }

@@ -59,8 +59,10 @@ public:
             add_worker();  // worker
         }
     }
+
     workbranch(const workbranch&) = delete;
     workbranch(workbranch&&) = delete;
+
     ~workbranch() {
         std::unique_lock<std::mutex> lock(lok);
         decline = workers.size();
@@ -129,6 +131,7 @@ public:
         std::lock_guard<std::mutex> lock(lok);
         return workers.size();
     }
+
     /**
      * @brief get number of tasks in the task queue
      * @return number
@@ -152,6 +155,7 @@ public:
 
         return submit<T>(std::move(task_lambda));
     }
+
     /**
      * @brief async execute the task
      * @tparam T Task priority tag: either `normal` (default) or `urgent`

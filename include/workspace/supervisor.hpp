@@ -69,14 +69,13 @@ public:
     /**
      * @brief construct supervisor using cpu core multiples
      * @param tag tag type for dispatch
-     * @param minCoreMultiple multiple of min workers
-     * @param maxCoreMultiple multiple of max workers
+     * @param min_core_mult multiple of min workers
+     * @param max_core_mult multiple of max workers
      * @param time_interval interval (ms) between each supervision check
      */
-    explicit supervisor(cpu_multiple_tag_t, double minCoreMultiple, double maxCoreMultiple,
-                        unsigned time_interval = 500)
-      : supervisor(static_cast<int>(std::ceil(std::max(1u, std::thread::hardware_concurrency()) * minCoreMultiple)),
-                   static_cast<int>(std::ceil(std::max(1u, std::thread::hardware_concurrency()) * maxCoreMultiple)),
+    explicit supervisor(cpu_multiple_tag_t, double min_core_mult, double max_core_mult, unsigned time_interval = 500)
+      : supervisor(static_cast<int>(std::ceil(std::max(1u, std::thread::hardware_concurrency()) * min_core_mult)),
+                   static_cast<int>(std::ceil(std::max(1u, std::thread::hardware_concurrency()) * max_core_mult)),
                    time_interval) {
     }
 
@@ -121,13 +120,13 @@ public:
      * @brief start supervising a workbranch with worker limits based on CPU cores
      * @param wbr Reference to the workbranch to supervise
      * @param tag Tag to indicate CPU core scaling mode
-     * @param minCoreMultiple min workers = ceil(cores * minCoreMultiple)
-     * @param maxCoreMultiple max workers = ceil(cores * maxCoreMultiple)
+     * @param min_core_mult multiple of min workers
+     * @param max_core_mult multiple of max workers
      */
-    void supervise(workbranch& wbr, cpu_multiple_tag_t, double minCoreMultiple, double maxCoreMultiple) {
+    void supervise(workbranch& wbr, cpu_multiple_tag_t, double min_core_mult, double max_core_mult) {
         auto cores = (std::max)(1u, std::thread::hardware_concurrency());
-        int min = static_cast<int>(std::ceil(cores * minCoreMultiple));
-        int max = static_cast<int>(std::ceil(cores * maxCoreMultiple));
+        int min = static_cast<int>(std::ceil(cores * min_core_mult));
+        int max = static_cast<int>(std::ceil(cores * max_core_mult));
         supervise(wbr, min, max);
     }
 
