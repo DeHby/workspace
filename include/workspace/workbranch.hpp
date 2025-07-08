@@ -213,9 +213,9 @@ public:
      * @return std::future<R>
      */
     template <typename T = normal, typename F, typename R = details::result_of_t<F>,
-              typename DR = typename std::enable_if<!std::is_void<R>::value, R>::type>
-    auto submit(F&& task, typename std::enable_if<!std::is_same<T, sequence>::value, sequence>::type = {})
-        -> std::future<R> {
+              typename DR = typename std::enable_if<!std::is_void<R>::value, R>::type,
+              typename = typename std::enable_if<!std::is_same<T, sequence>::value>::type>
+    auto submit(F&& task) -> std::future<R> {
         auto task_ptr = std::make_shared<std::packaged_task<R()>>(std::forward<F>(task));
         auto future = task_ptr->get_future();
         auto wrapper_task = [task = std::move(task_ptr)] {
