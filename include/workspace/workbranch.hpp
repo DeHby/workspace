@@ -70,9 +70,16 @@ public:
         destructing = true;
         if (wait_strategy == waitstrategy::blocking) task_cv.notify_all();
 
-        if (!thread_cv.wait_for(lock, std::chrono::seconds(2), [this]() { return decline == 0; })) {
-            workers.clear();
-            decline = 0;
+        while (decline > 0) {
+            for (auto it = workers.begin(); it != workers.end();) {
+                if (!it->second.is_alive()) {
+                    it = workers.erase(it);
+                    --decline;
+                } else {
+                    ++it;
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 
