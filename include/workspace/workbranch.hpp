@@ -68,7 +68,18 @@ public:
         decline = workers.size();
         destructing = true;
         if (wait_strategy == waitstrategy::blocking) task_cv.notify_all();
-        thread_cv.wait(lock, [this] { return !decline; });
+
+        const auto timeout = std::chrono::seconds(2);
+        const auto deadline = std::chrono::steady_clock::now() + timeout;
+
+        while (decline > 0) {
+            if (decline <= 1) break;
+
+            if (thread_cv.wait_until(lock, deadline) == std::cv_status::timeout) break;
+        }
+
+        workers.clear();
+        decline = 0;
     }
 
 public:
