@@ -32,7 +32,8 @@ class workbranch {
     const int max_spin_count = 10000;
     waitstrategy wait_strategy = {};
 
-    size_t decline = 0;
+    std::atomic<size_t> decline = 0;
+
     size_t task_done_workers = 0;
     size_t waiting_finished_worker = 0;
     bool is_waiting = false;
@@ -69,17 +70,10 @@ public:
         destructing = true;
         if (wait_strategy == waitstrategy::blocking) task_cv.notify_all();
 
-        const auto timeout = std::chrono::seconds(2);
-        const auto deadline = std::chrono::steady_clock::now() + timeout;
-
-        while (decline > 0) {
-            if (decline <= 1) break;
-
-            if (thread_cv.wait_until(lock, deadline) == std::cv_status::timeout) break;
+        if (!thread_cv.wait_for(lock, std::chrono::seconds(2), [this]() { return decline == 0; })) {
+            workers.clear();
+            decline = 0;
         }
-
-        workers.clear();
-        decline = 0;
     }
 
 public:
@@ -345,7 +339,7 @@ private:
                         }
                         case waitstrategy::blocking: {
                             std::unique_lock<std::mutex> locker(lok);
-                            task_cv.wait(locker, [this] { return num_tasks() > 0 || is_waiting || destructing; });
+                            task_cv.wait(locker, [this] { return is_waiting || destructing || num_tasks() > 0; });
                             break;
                         }
                     }
