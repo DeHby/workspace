@@ -37,7 +37,7 @@ class workbranch {
     size_t task_done_workers = 0;
     size_t waiting_finished_worker = 0;
     bool is_waiting = false;
-    bool destructing = false;
+    std::atomic_bool destructing = false;
 
     worker_map workers = {};
     taskqueue<task_t> tq = {};
@@ -65,12 +65,17 @@ public:
     workbranch(workbranch&&) = delete;
 
     ~workbranch() {
-        std::unique_lock<std::mutex> lock(lok);
-        decline = workers.size();
+        {
+            std::lock_guard<std::mutex> lock(lok);
+            decline = workers.size();
+        }
+
         destructing = true;
+
         if (wait_strategy == waitstrategy::blocking) task_cv.notify_all();
 
         while (decline > 0) {
+            std::lock_guard<std::mutex> lock(lok);
             for (auto it = workers.begin(); it != workers.end();) {
                 if (!it->second.is_alive()) {
                     it = workers.erase(it);
