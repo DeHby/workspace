@@ -49,11 +49,6 @@ struct is_function_<function_<R, N>> : std::true_type {};
 template <typename R, typename... Args, size_t InlineSize>
 class function_<R(Args...), InlineSize> {
 private:
-    template <typename T>
-    struct callable_size {
-        static constexpr size_t value = sizeof(callable_impl<T>);
-    };
-
     struct callable_base {
         virtual R invoke(Args&&...) = 0;
         virtual void move_into(void* buffer) = 0;
@@ -118,6 +113,11 @@ private:
         void clone_into(void* buffer) const override {
             new (buffer) heap_callable_impl(*pf);
         }
+    };
+
+    template <typename T>
+    struct callable_size {
+        static constexpr size_t value = sizeof(callable_impl<T>);
     };
 
 public:
