@@ -172,6 +172,12 @@ private:
                         if (tknums) {
                             assert(wknums <= pbr.max);  // Avoid wrong usage
                             size_t nums = std::min(pbr.max - wknums, tknums - wknums);
+
+                            // ensure at least one worker
+                            if (nums == 0 && wknums < pbr.min) {
+                                nums = 1;
+                            }
+
                             for (size_t i = 0; i < nums; ++i) {
                                 branch->add_worker();  // quick add
                             }

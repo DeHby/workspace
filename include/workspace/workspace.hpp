@@ -122,7 +122,7 @@ public:
      */
     sid attach(supervisor* sp) {
         assert(sp != nullptr);
-        supervs.emplace(sp, sp);
+        supervs.emplace(sp, std::unique_ptr<supervisor>(sp));
         return sid(sp);
     }
 

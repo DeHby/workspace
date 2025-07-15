@@ -32,11 +32,12 @@ class workbranch {
     const int max_spin_count = 10000;
     waitstrategy wait_strategy = {};
 
-    size_t decline = 0;
+    std::atomic<size_t> decline = 0;
+
     size_t task_done_workers = 0;
     size_t waiting_finished_worker = 0;
     bool is_waiting = false;
-    bool destructing = false;
+    std::atomic_bool destructing = false;
 
     worker_map workers = {};
     taskqueue<task_t> tq = {};
@@ -64,11 +65,25 @@ public:
     workbranch(workbranch&&) = delete;
 
     ~workbranch() {
-        std::unique_lock<std::mutex> lock(lok);
-        decline = workers.size();
         destructing = true;
+        decline = workers.size();
+
         if (wait_strategy == waitstrategy::blocking) task_cv.notify_all();
-        thread_cv.wait(lock, [this] { return !decline; });
+
+        while (decline > 0) {
+            {
+                std::lock_guard<std::mutex> lock(lok);
+                for (auto it = workers.begin(); it != workers.end();) {
+                    if (!it->second.is_alive()) {
+                        it = workers.erase(it);
+                        --decline;
+                    } else {
+                        ++it;
+                    }
+                }
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
     }
 
 public:
@@ -213,9 +228,9 @@ public:
      * @return std::future<R>
      */
     template <typename T = normal, typename F, typename R = details::result_of_t<F>,
-              typename DR = typename std::enable_if<!std::is_void<R>::value, R>::type>
-    auto submit(F&& task, typename std::enable_if<!std::is_same<T, sequence>::value, sequence>::type = {})
-        -> std::future<R> {
+              typename DR = typename std::enable_if<!std::is_void<R>::value, R>::type,
+              typename = typename std::enable_if<!std::is_same<T, sequence>::value>::type>
+    auto submit(F&& task) -> std::future<R> {
         auto task_ptr = std::make_shared<std::packaged_task<R()>>(std::forward<F>(task));
         auto future = task_ptr->get_future();
         auto wrapper_task = [task = std::move(task_ptr)] {
@@ -334,7 +349,7 @@ private:
                         }
                         case waitstrategy::blocking: {
                             std::unique_lock<std::mutex> locker(lok);
-                            task_cv.wait(locker, [this] { return num_tasks() > 0 || is_waiting || destructing; });
+                            task_cv.wait(locker, [this] { return is_waiting || destructing || num_tasks() > 0; });
                             break;
                         }
                     }
