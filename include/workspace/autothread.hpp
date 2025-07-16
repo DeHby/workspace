@@ -78,10 +78,8 @@ public:
         if (thrd.joinable()) {
             auto handle = thrd.native_handle();
 #if defined(_WIN32)
-            DWORD exitCode = 0;
-            if (GetExitCodeThread(handle, &exitCode)) {
-                return exitCode == STILL_ACTIVE;
-            }
+            DWORD waitResult = WaitForSingleObject(handle, 0);
+            return waitResult == WAIT_TIMEOUT;
 #else
             return pthread_kill(handle, 0) == 0;
 #endif

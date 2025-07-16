@@ -1,7 +1,7 @@
 #pragma once
 #include <cassert>
 #include <list>
-#include <map>
+#include <unordered_map>
 #include <memory>
 #include <vector>
 #include <workspace/supervisor.hpp>
@@ -84,7 +84,7 @@ public:
 
 private:
     using branch_lst = std::list<std::unique_ptr<workbranch>>;
-    using superv_map = std::map<const supervisor*, std::unique_ptr<supervisor>>;
+    using superv_map = std::unordered_map<const supervisor*, std::unique_ptr<supervisor>>;
     using pos_t = branch_lst::iterator;
 
     pos_t cur = {};

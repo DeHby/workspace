@@ -18,6 +18,8 @@ constexpr static cpu_multiple_tag_t cpu_multiple_tag{};
 // workbranch supervisor
 class supervisor {
     using tick_callback_t = std::function<void()>;
+    constexpr static auto default_time_interval = std::chrono::milliseconds(100);
+    constexpr static auto default_max_time_interval = std::chrono::milliseconds::max();
 
 private:
     struct BranchLimits {
@@ -30,8 +32,8 @@ private:
 
     size_t wmin = 0;
     size_t wmax = 0;
-    unsigned tout = 0;
-    const unsigned tval = 0;
+    std::chrono::milliseconds tout;
+    std::chrono::milliseconds tval;
 
     tick_callback_t tick_cb;
 
@@ -48,7 +50,7 @@ public:
      * @param max_wokrs max nums of workers
      * @param time_interval  time interval between each check
      */
-    explicit supervisor(int min_wokrs, int max_wokrs, unsigned time_interval = 500)
+    explicit supervisor(int min_wokrs, int max_wokrs, std::chrono::milliseconds time_interval = default_time_interval)
       : wmin(min_wokrs)
       , wmax(max_wokrs)
       , tout(time_interval)
@@ -62,7 +64,7 @@ public:
      * @brief construct a supervisor with default min/max based on hardware concurrency
      * @param time_interval interval (ms) between each supervision check
      */
-    explicit supervisor(unsigned time_interval = 500)
+    explicit supervisor(std::chrono::milliseconds time_interval = default_time_interval)
       : supervisor(1, std::max(2u, std::thread::hardware_concurrency()), time_interval) {
     }
 
@@ -73,7 +75,8 @@ public:
      * @param max_core_mult multiple of max workers
      * @param time_interval interval (ms) between each supervision check
      */
-    explicit supervisor(cpu_multiple_tag_t, double min_core_mult, double max_core_mult, unsigned time_interval = 500)
+    explicit supervisor(cpu_multiple_tag_t, double min_core_mult, double max_core_mult,
+                        std::chrono::milliseconds time_interval = default_time_interval)
       : supervisor(static_cast<int>(std::ceil(std::max(1u, std::thread::hardware_concurrency()) * min_core_mult)),
                    static_cast<int>(std::ceil(std::max(1u, std::thread::hardware_concurrency()) * max_core_mult)),
                    time_interval) {
@@ -96,7 +99,7 @@ public:
      * @param min_wokrs min nums of workers
      * @param max_wokrs max nums of workers
      */
-    void supervise(workbranch& wbr, int min_wokrs, int max_wokrs) {
+    void supervise(workbranch& wbr, size_t min_wokrs, size_t max_wokrs) {
         std::lock_guard<std::mutex> lock(spv_lok);
 
         BranchLimits branch;
@@ -104,6 +107,10 @@ public:
         branch.min = min_wokrs;
         branch.max = max_wokrs;
         branches.emplace_back(std::move(branch));
+
+        while (wbr.num_workers() < min_wokrs) {
+            wbr.add_worker();
+        }
     }
 
     /**
@@ -125,8 +132,8 @@ public:
      */
     void supervise(workbranch& wbr, cpu_multiple_tag_t, double min_core_mult, double max_core_mult) {
         auto cores = (std::max)(1u, std::thread::hardware_concurrency());
-        int min = static_cast<int>(std::ceil(cores * min_core_mult));
-        int max = static_cast<int>(std::ceil(cores * max_core_mult));
+        auto min = static_cast<size_t>(std::ceil(cores * min_core_mult));
+        auto max = static_cast<size_t>(std::ceil(cores * max_core_mult));
         supervise(wbr, min, max);
     }
 
@@ -134,7 +141,7 @@ public:
      * @brief suspend the supervisor
      * @param timeout the longest waiting time
      */
-    void suspend(unsigned timeout = std::numeric_limits<unsigned>::max()) {
+    void suspend(std::chrono::milliseconds timeout = default_max_time_interval) {
         std::lock_guard<std::mutex> lock(spv_lok);
         tout = timeout;
     }
@@ -163,29 +170,23 @@ private:
             try {
                 {
                     std::unique_lock<std::mutex> lock(spv_lok);
-                    for (auto& pbr : branches) {
-                        auto& branch = pbr.branch;
+                    for (auto& branch_limits : branches) {
+                        auto& branch = branch_limits.branch;
                         // get info
                         auto tknums = branch->num_tasks();
                         auto wknums = branch->num_workers();
                         // adjust
                         if (tknums) {
-                            assert(wknums <= pbr.max);  // Avoid wrong usage
-                            size_t nums = std::min(pbr.max - wknums, tknums - wknums);
-
-                            // ensure at least one worker
-                            if (nums == 0 && wknums < pbr.min) {
-                                nums = 1;
-                            }
-
+                            assert(wknums <= branch_limits.max);  // Avoid wrong usage
+                            size_t nums = std::min(branch_limits.max - wknums, tknums - wknums);
                             for (size_t i = 0; i < nums; ++i) {
                                 branch->add_worker();  // quick add
                             }
-                        } else if (wknums > pbr.min) {
+                        } else if (wknums > branch_limits.min) {
                             branch->del_worker();  // slow dec
                         }
                     }
-                    if (!stop) thrd_cv.wait_for(lock, std::chrono::milliseconds(tout));
+                    if (!stop) thrd_cv.wait_for(lock, tout);
                 }
                 if (tick_cb) tick_cb();  // execute tick callback
 
