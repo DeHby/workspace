@@ -63,7 +63,7 @@ public:
     dynbranch(dynbranch&&) = delete;
 
     template <typename T = normal, typename F, typename... Args, typename R = details::result_of_t<F, Args...>>
-    auto submit(F&& task, Args&&... args) -> auto{
+    auto submit(F&& task, Args&&... args) -> auto {
         return branch->submit<T>(std::forward<F>(task), std::forward<Args>(args)...);
     }
 

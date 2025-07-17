@@ -424,7 +424,7 @@ private:
                     std::this_thread::yield();
                 } else {
                     // Just tell the system to suspend this thread in the shortest time
-                    std::this_thread::sleep_for(std::chrono::nanoseconds(1));
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 }
                 break;
             }

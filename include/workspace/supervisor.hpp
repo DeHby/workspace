@@ -212,8 +212,6 @@ private:
                             }
                         }
                     }
-
-                    std::this_thread::sleep_for(std::chrono::nanoseconds(1));
                 }
 
                 auto now = std::chrono::steady_clock::now();
@@ -228,6 +226,8 @@ private:
                           << '\n'
                           << std::flush;
             }
+
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
         }
     }
 };
