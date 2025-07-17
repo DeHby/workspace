@@ -224,7 +224,7 @@ public:
 
 public:
     /**
-     * @brief Submit a task with arguments by binding them and forwarding to submit.
+     * @brief submit a task with arguments by binding them and forwarding to submit.
      * @param task Callable object.
      * @param args Arguments for the callable.
      */

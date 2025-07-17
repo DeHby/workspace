@@ -26,14 +26,14 @@ public:
     /**
      * @brief construct a dynbranch with fixed worker limits.
      *
-     * @param strategy         wait strategy (e.g., blocking or spinning).
      * @param min_workers      minimum number of worker threads.
      * @param max_workers      maximum number of worker threads.
+     * @param strategy         wait strategy (e.g., blocking or spinning).
      * @param idle_timeout timeout (ms) for idle worker detection
      * @param time_interval interval (ms) between supervision checks
      */
-    explicit dynbranch(waitstrategy strategy = waitstrategy::blocking, int min_workers = 1,
-                       int max_workers = std::max(2u, std::thread::hardware_concurrency()),
+    explicit dynbranch(int min_workers = 1, int max_workers = std::max(2u, std::thread::hardware_concurrency()),
+                       waitstrategy strategy = waitstrategy::blocking,
                        std::chrono::milliseconds idle_timeout = default_time_idle,
                        std::chrono::milliseconds time_interval = default_time_interval)
       : branch(std::make_shared<details::workbranch>(1, strategy))
@@ -44,14 +44,15 @@ public:
     /**
      * @brief construct a dynbranch using CPU-core-multiplied worker limits.
      *
-     * @param strategy         Wait strategy.
      * @param min_core_mult    Minimum thread count = core count × min_core_mult.
      * @param max_core_mult    Maximum thread count = core count × max_core_mult.
+     * @param strategy         Wait strategy.
      * @param idle_timeout timeout (ms) for idle worker detection
      * @param time_interval interval (ms) between supervision checks
      */
-    dynbranch(cpu_multiple_tag_t, waitstrategy strategy = waitstrategy::blocking, double min_core_mult = 1,
-              double max_core_mult = 2, std::chrono::milliseconds idle_timeout = default_time_idle,
+    dynbranch(cpu_multiple_tag_t, double min_core_mult = 1, double max_core_mult = 2,
+              waitstrategy strategy = waitstrategy::blocking,
+              std::chrono::milliseconds idle_timeout = default_time_idle,
               std::chrono::milliseconds time_interval = default_time_interval)
       : branch(std::make_shared<details::workbranch>(1, strategy))
       , supervisor(std::make_unique<details::supervisor>(idle_timeout, time_interval)) {
@@ -61,34 +62,22 @@ public:
     dynbranch(const dynbranch&) = delete;
     dynbranch(dynbranch&&) = delete;
 
-    /**
-     * @brief submit a task and return a future.
-     */
     template <typename T = normal, typename F, typename... Args, typename R = details::result_of_t<F, Args...>>
-    auto submit(F&& task, Args&&... args) -> std::future<R> {
+    auto submit(F&& task, Args&&... args) -> auto{
         return branch->submit<T>(std::forward<F>(task), std::forward<Args>(args)...);
     }
 
-    /**
-     * @brief submit a void-returning task (non-sequence type).
-     */
     template <typename T = normal, typename F, typename R = details::result_of_t<F>,
               typename DR = typename std::enable_if<std::is_void<R>::value>::type>
     auto submit(F&& task) -> typename std::enable_if<!std::is_same<T, sequence>::value>::type {
-        branch->submit<T>(std::forward<F>(task));
+        return branch->submit<T>(std::forward<F>(task));
     }
 
-    /**
-     * @brief submit a sequence of tasks (sequence type only).
-     */
     template <typename T, typename F, typename... Fs>
     auto submit(F&& task, Fs&&... tasks) -> typename std::enable_if<std::is_same<T, sequence>::value>::type {
-        branch->submit<T>(std::forward<F>(task), std::forward<Fs>(tasks)...);
+        return branch->submit<T>(std::forward<F>(task), std::forward<Fs>(tasks)...);
     }
 
-    /**
-     * @brief submit a task and return a future (non-sequence, non-void).
-     */
     template <typename T = normal, typename F, typename R = details::result_of_t<F>,
               typename DR = typename std::enable_if<!std::is_void<R>::value, R>::type,
               typename = typename std::enable_if<!std::is_same<T, sequence>::value>::type>
@@ -96,9 +85,6 @@ public:
         return branch->submit<T>(std::forward<F>(task));
     }
 
-    /**
-     * @brief submit a task and explicitly get a future (same as submit).
-     */
     template <typename T = normal, typename F, typename... Args, typename R = details::result_of_t<F, Args...>,
               typename = std::enable_if_t<!std::is_same<T, sequence>::value>>
     std::future<R> submit_future(F&& task, Args&&... args) {
