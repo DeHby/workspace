@@ -1,11 +1,13 @@
 #pragma once
 #include <cassert>
 #include <list>
-#include <unordered_map>
 #include <memory>
+#include <unordered_map>
 #include <vector>
+#include <workspace/dynbranch.hpp>
 #include <workspace/supervisor.hpp>
 #include <workspace/workbranch.hpp>
+
 
 // public
 namespace wsp {
@@ -27,6 +29,7 @@ using futures = details::futures<RT>;
 using workbranch = details::workbranch;
 // workbranch supervisor
 using supervisor = details::supervisor;
+using dynbranch = details::dynbranch;
 
 }  // namespace wsp
 

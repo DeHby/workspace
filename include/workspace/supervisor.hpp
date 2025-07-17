@@ -13,150 +13,167 @@
 
 namespace wsp {
 namespace details {
-struct cpu_multiple_tag_t {};
-constexpr static cpu_multiple_tag_t cpu_multiple_tag{};
 // workbranch supervisor
 class supervisor {
     using tick_callback_t = std::function<void()>;
-    constexpr static auto default_time_interval = std::chrono::milliseconds(100);
-    constexpr static auto default_max_time_interval = std::chrono::milliseconds::max();
+    constexpr static auto default_time_idle = std::chrono::milliseconds(5000);
+    constexpr static auto default_time_interval = std::chrono::milliseconds(1000);
 
-private:
     struct BranchLimits {
-        workbranch* branch;
+        std::shared_ptr<workbranch> branch;
         size_t min;
         size_t max;
+        std::chrono::milliseconds idle_timeout;
     };
 
-    std::atomic<bool> stop = false;
+    std::atomic_bool stop = false;
 
     size_t wmin = 0;
     size_t wmax = 0;
     std::chrono::milliseconds tout;
     std::chrono::milliseconds tval;
 
+    std::chrono::milliseconds default_idle_timeout;
+
     tick_callback_t tick_cb;
 
     std::mutex spv_lok;
     std::condition_variable thrd_cv;
 
-    std::unique_ptr<autothread<join>> worker;
-    std::vector<BranchLimits> branches;
+    std::thread worker;
+    std::vector<BranchLimits> branch_limits;
 
 public:
     /**
-     * @brief construct a supervisor
-     * @param min_wokrs min nums of workers
-     * @param max_wokrs max nums of workers
-     * @param time_interval  time interval between each check
+     * @brief construct a supervisor with specified worker limits and intervals
+     * @param min_wokrs minimum number of workers
+     * @param max_wokrs maximum number of workers
+     * @param idle_timeout timeout (ms) for idle worker detection
+     * @param time_interval interval (ms) between supervision checks
      */
-    explicit supervisor(int min_wokrs, int max_wokrs, std::chrono::milliseconds time_interval = default_time_interval)
+    explicit supervisor(int min_wokrs, int max_wokrs, std::chrono::milliseconds idle_timeout = default_time_idle,
+                        std::chrono::milliseconds time_interval = default_time_interval)
       : wmin(min_wokrs)
       , wmax(max_wokrs)
       , tout(time_interval)
       , tval(time_interval)
-      , tick_cb(nullptr) {
+      , tick_cb(nullptr)
+      , default_idle_timeout(idle_timeout) {
         assert(min_wokrs >= 0 && max_wokrs > 0 && max_wokrs > min_wokrs);
-        worker = std::make_unique<autothread<join>>(&supervisor::mission, this);
+        worker = std::thread(&supervisor::mission, this);
     }
 
     /**
-     * @brief construct a supervisor with default min/max based on hardware concurrency
-     * @param time_interval interval (ms) between each supervision check
+     * @brief construct a supervisor with default worker limits
+     * @param idle_timeout timeout (ms) for idle worker detection
+     * @param time_interval interval (ms) between supervision checks
+     * @note uses 1 as min workers and max(2, hardware_concurrency) as max workers
      */
-    explicit supervisor(std::chrono::milliseconds time_interval = default_time_interval)
-      : supervisor(1, std::max(2u, std::thread::hardware_concurrency()), time_interval) {
+    explicit supervisor(std::chrono::milliseconds idle_timeout = default_time_idle,
+                        std::chrono::milliseconds time_interval = default_time_interval)
+      : supervisor(1, std::max(2u, std::thread::hardware_concurrency()), idle_timeout, time_interval) {
     }
 
     /**
-     * @brief construct supervisor using cpu core multiples
-     * @param tag tag type for dispatch
-     * @param min_core_mult multiple of min workers
-     * @param max_core_mult multiple of max workers
-     * @param time_interval interval (ms) between each supervision check
+     * @brief construct a supervisor with worker limits based on cpu core multiples
+     * @param tag tag for cpu core scaling mode
+     * @param min_core_mult multiple for minimum workers
+     * @param max_core_mult multiple for maximum workers
+     * @param idle_timeout timeout (ms) for idle worker detection
+     * @param time_interval interval (ms) between supervision checks
      */
     explicit supervisor(cpu_multiple_tag_t, double min_core_mult, double max_core_mult,
+                        std::chrono::milliseconds idle_timeout = default_time_idle,
                         std::chrono::milliseconds time_interval = default_time_interval)
       : supervisor(static_cast<int>(std::ceil(std::max(1u, std::thread::hardware_concurrency()) * min_core_mult)),
                    static_cast<int>(std::ceil(std::max(1u, std::thread::hardware_concurrency()) * max_core_mult)),
-                   time_interval) {
+                   idle_timeout, time_interval) {
     }
 
     supervisor(const supervisor&) = delete;
     supervisor(supervisor&&) = delete;
+
+    /**
+     * @brief destroy the supervisor and stop supervision
+     * @note joins the supervisor thread after setting stop flag
+     */
     ~supervisor() {
         {
             std::lock_guard<std::mutex> lock(spv_lok);
             stop = true;
-            thrd_cv.notify_one();
+        }
+        if (worker.joinable()) {
+            worker.join();  // wait for the loop to finish
         }
     }
 
 public:
     /**
-     * @brief start supervising a workbranch with specified min and max workers
-     * @param wbr Reference to the workbranch to supervise
-     * @param min_wokrs min nums of workers
-     * @param max_wokrs max nums of workers
+     * @brief start supervising a workbranch with specified limits
+     * @param wbr shared pointer to the workbranch
+     * @param min_workers minimum number of workers
+     * @param max_workers maximum number of workers
+     * @param idle_timeout timeout (ms) for idle worker detection
      */
-    void supervise(workbranch& wbr, size_t min_wokrs, size_t max_wokrs) {
+    void supervise(std::shared_ptr<workbranch> wbr, size_t min_workers, size_t max_workers,
+                   std::chrono::milliseconds idle_timeout = default_time_idle) {
         std::lock_guard<std::mutex> lock(spv_lok);
-
-        BranchLimits branch;
-        branch.branch = &wbr;
-        branch.min = min_wokrs;
-        branch.max = max_wokrs;
-        branches.emplace_back(std::move(branch));
-
-        while (wbr.num_workers() < min_wokrs) {
-            wbr.add_worker();
+        auto it = std::find_if(branch_limits.begin(), branch_limits.end(),
+                               [&wbr](const BranchLimits& bl) { return bl.branch == wbr; });
+        if (it == branch_limits.end()) {
+            BranchLimits bl{wbr, min_workers, max_workers, idle_timeout};
+            branch_limits.emplace_back(std::move(bl));
+        } else {
+            it->min = min_workers;
+            it->max = max_workers;
+            it->idle_timeout = idle_timeout;
         }
     }
 
     /**
-     * @brief start supervising a workbranch with default min/max workers
-     * @param wbr Reference to the workbranch to supervise
-     *
-     * Uses the supervisor's default min/max worker limits.
+     * @brief start supervising a workbranch with default limits
+     * @param wbr shared pointer to the workbranch
+     * @note uses supervisor's default min, max, and idle_timeout
      */
-    void supervise(workbranch& wbr) {
-        supervise(wbr, static_cast<int>(wmin), static_cast<int>(wmax));
+    void supervise(std::shared_ptr<workbranch> wbr) {
+        supervise(std::move(wbr), wmin, wmax, default_idle_timeout);
     }
 
     /**
-     * @brief start supervising a workbranch with worker limits based on CPU cores
-     * @param wbr Reference to the workbranch to supervise
-     * @param tag Tag to indicate CPU core scaling mode
-     * @param min_core_mult multiple of min workers
-     * @param max_core_mult multiple of max workers
+     * @brief start supervising a workbranch with cpu core-based limits
+     * @param wbr shared pointer to the workbranch
+     * @param tag tag for cpu core scaling mode
+     * @param min_core_mult multiple for minimum workers
+     * @param max_core_mult multiple for maximum workers
+     * @param idle_timeout timeout (ms) for idle worker detection
      */
-    void supervise(workbranch& wbr, cpu_multiple_tag_t, double min_core_mult, double max_core_mult) {
+    void supervise(std::shared_ptr<workbranch> wbr, cpu_multiple_tag_t, double min_core_mult, double max_core_mult,
+                   std::chrono::milliseconds idle_timeout = default_time_idle) {
         auto cores = (std::max)(1u, std::thread::hardware_concurrency());
         auto min = static_cast<size_t>(std::ceil(cores * min_core_mult));
         auto max = static_cast<size_t>(std::ceil(cores * max_core_mult));
-        supervise(wbr, min, max);
+        supervise(std::move(wbr), min, max, idle_timeout);
     }
 
     /**
-     * @brief suspend the supervisor
-     * @param timeout the longest waiting time
+     * @brief suspend the supervisor for a specified duration
+     * @param timeout duration (ms) to suspend supervision
      */
-    void suspend(std::chrono::milliseconds timeout = default_max_time_interval) {
+    void suspend(std::chrono::milliseconds timeout = default_max_time) {
         std::lock_guard<std::mutex> lock(spv_lok);
         tout = timeout;
     }
 
-    // go on supervising
+    /**
+     * @brief resume supervision with original interval
+     */
     void proceed() {
-        {
-            std::lock_guard<std::mutex> lock(spv_lok);
-            tout = tval;
-        }
-        thrd_cv.notify_one();
+        std::lock_guard<std::mutex> lock(spv_lok);
+        tout = tval;
     }
 
     /**
-     * @brief Always execute callback before taking a rest
+     * @brief set callback to execute before each supervision rest
      * @param cb callback function
      */
     void set_tick_cb(tick_callback_t cb) {
@@ -166,29 +183,44 @@ public:
 private:
     // loop func
     void mission() {
+        std::chrono::steady_clock::time_point last_tick = std::chrono::steady_clock::now();
         while (!stop) {
             try {
                 {
-                    std::unique_lock<std::mutex> lock(spv_lok);
-                    for (auto& branch_limits : branches) {
-                        auto& branch = branch_limits.branch;
+                    std::lock_guard<std::mutex> lock(spv_lok);
+                    for (auto& limit : branch_limits) {
+                        auto& branch = limit.branch;
                         // get info
                         auto tknums = branch->num_tasks();
                         auto wknums = branch->num_workers();
                         // adjust
+
+                        if (wknums > limit.max) {
+                            auto num = wknums - limit.max;
+                            branch->del_worker(num);
+                            continue;
+                        }
+
                         if (tknums) {
-                            assert(wknums <= branch_limits.max);  // Avoid wrong usage
-                            size_t nums = std::min(branch_limits.max - wknums, tknums - wknums);
-                            for (size_t i = 0; i < nums; ++i) {
-                                branch->add_worker();  // quick add
+                            size_t nums = std::min(limit.max - wknums, tknums - wknums);
+                            branch->add_worker(nums);  // quick add
+
+                        } else if (wknums > limit.min) {
+                            auto size = branch->count_idle_workers(limit.idle_timeout);
+                            if (size > limit.min) {
+                                branch->del_worker(size - limit.min);  // quick dec
                             }
-                        } else if (wknums > branch_limits.min) {
-                            branch->del_worker();  // slow dec
                         }
                     }
-                    if (!stop) thrd_cv.wait_for(lock, tout);
+
+                    std::this_thread::sleep_for(std::chrono::nanoseconds(1));
                 }
-                if (tick_cb) tick_cb();  // execute tick callback
+
+                auto now = std::chrono::steady_clock::now();
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(now - last_tick) >= tout) {
+                    last_tick = now;
+                    if (tick_cb) tick_cb();  // execute tick callback
+                }
 
             } catch (const std::exception& e) {
                 std::cerr << "workspace: supervisor[" << std::this_thread::get_id() << "] caught exception:\n  \

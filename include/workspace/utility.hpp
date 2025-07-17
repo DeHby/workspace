@@ -30,6 +30,9 @@ using result_of_t = typename std::result_of<F(Args...)>::type;
 #endif
 #endif
 
+constexpr auto default_max_time =
+    std::chrono::milliseconds(std::chrono::milliseconds(std::numeric_limits<std::uint32_t>::max()));
+
 // type trait
 struct normal {};    // normal task (for type inference)
 struct urgent {};    // urgent task (for type inference)

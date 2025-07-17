@@ -4,13 +4,14 @@
 #include <cstdlib>
 #include <future>
 #include <iostream>
-#include <unordered_map>
 #include <memory>
 #include <tuple>
+#include <unordered_map>
 #include <workspace/autothread.hpp>
 #include <workspace/invoke.hpp>
 #include <workspace/taskqueue.hpp>
 #include <workspace/utility.hpp>
+
 
 namespace wsp {
 
@@ -23,33 +24,69 @@ enum class waitstrategy {
 
 namespace details {
 
+struct cpu_multiple_tag_t {};
+constexpr cpu_multiple_tag_t cpu_multiple_tag{};
+
 class workbranch {
     friend class supervisor;
     constexpr static int max_spin_count = 10000;
+    enum class worker_state { none, running, waiting, destructing };
 
-    enum class WorkerState { None, Running, Waiting, Destructing };
+    class worker_info {
+    public:
+        worker_info() = default;
+
+        autothread thread;
+        bool busy = false;
+        std::chrono::steady_clock::time_point last_active_time;
+
+        template <typename F, typename... Args>
+        worker_info(F&& f, Args&&... args)
+          : busy(false)
+          , thread(std::forward<F>(f), std::forward<Args>(args)...)
+          , last_active_time(std::chrono::steady_clock::now()) {
+        }
+
+        void mark_idle() {
+            busy = false;
+            last_active_time = std::chrono::steady_clock::now();
+        }
+
+        void mark_busy() {
+            busy = true;
+        }
+
+        bool is_idle() const {
+            return !busy;
+        }
+    };
 
     using worker_id = uintmax_t;
-    using worker_map = std::unordered_map<worker_id, autothread<detach>>;
+    using worker_map = std::unordered_map<worker_id, worker_info>;
 
     std::atomic<worker_id> worker_next_id = 0;
 
-    waitstrategy wait_strategy = {};
+    waitstrategy wait_strategy;
 
-    std::atomic<size_t> decline = 0;
-    size_t task_done_workers = 0;
-    size_t waiting_finished_worker = 0;
+    std::atomic_size_t pending_deletions = 0;
 
-    std::atomic<WorkerState> worker_state = WorkerState::None;
+    std::atomic_size_t idle_workers = 0;
+    std::atomic_size_t resumed_workers = 0;
 
-    worker_map workers = {};
-    taskqueue<task_t> tq = {};
+    std::atomic_bool is_deleting = false;
+    std::atomic<worker_state> worker_state = worker_state::none;
 
-    std::mutex lok = {};
-    std::condition_variable thread_cv = {};
-    std::condition_variable task_done_cv = {};
-    std::condition_variable task_cv = {};
-    std::condition_variable waiting_finished = {};
+    worker_map workers;
+    taskqueue<task_t> tq;
+
+    std::mutex lok;
+    std::condition_variable thread_cv;
+    std::condition_variable task_cv;
+
+    std::condition_variable task_idle_cv;
+    std::condition_variable task_resume_cv;
+
+    std::condition_variable task_deletion_cv;
 
 public:
     /**
@@ -59,6 +96,7 @@ public:
      */
     explicit workbranch(int wks = 1, waitstrategy strategy = waitstrategy::blocking) {
         wait_strategy = strategy;
+        worker_state = worker_state::running;
         for (int i = 0; i < std::max(wks, 1); ++i) {
             add_worker();  // worker
         }
@@ -68,27 +106,35 @@ public:
     workbranch(workbranch&&) = delete;
 
     ~workbranch() {
-        worker_state = WorkerState::Destructing;
         {
-            std::lock_guard<std::mutex> lock(lok);
-            decline = workers.size();
+            std::unique_lock<std::mutex> locker(lok);
+            task_cv.wait(locker, [this] { return worker_state == worker_state::running; });
         }
 
-        if (wait_strategy == waitstrategy::blocking) task_cv.notify_all();
+        worker_state = worker_state::destructing;
+        {
+            std::lock_guard<std::mutex> lock(lok);
+            pending_deletions = workers.size();
+        }
+
+        if (wait_strategy == waitstrategy::blocking) {
+            task_cv.notify_all();
+        }
 
         for (;;) {
-            {
+            if (pending_deletions > 0) {
                 std::lock_guard<std::mutex> lock(lok);
-                if (decline > 0) {
-                    for (auto it = workers.begin(); it != workers.end();) {
-                        if (!it->second.is_alive()) {
-                            it = workers.erase(it);
-                            --decline;
-                        } else {
-                            ++it;
-                        }
+
+                for (auto it = workers.begin(); it != workers.end();) {
+                    if (!it->second.thread.is_alive()) {
+                        it = workers.erase(it);
+                        --pending_deletions;
+                    } else {
+                        ++it;
                     }
                 }
+            } else {
+                break;
             }
 
             std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -103,23 +149,31 @@ public:
      * @param timeout timeout for waiting
      * @return return true if all tasks done
      */
-    bool wait_tasks(std::chrono::milliseconds timeout = std::chrono::milliseconds::max()) {
+    bool wait_tasks(std::chrono::milliseconds timeout = default_max_time) {
+        if (worker_state != worker_state::running || pending_deletions != 0) {
+            return false;
+        }
+
         bool res;
         {
             std::unique_lock<std::mutex> locker(lok);
-            worker_state = WorkerState::Waiting;
-            if (wait_strategy == waitstrategy::blocking) task_cv.notify_all();
-            res = task_done_cv.wait_for(locker, timeout, [this] {
-                return task_done_workers >= workers.size();  // use ">=" to avoid supervisor delete workers
+            worker_state = worker_state::waiting;
+            if (wait_strategy == waitstrategy::blocking) {
+                task_cv.notify_all();
+            }
+
+            idle_workers = 0;
+            res = task_idle_cv.wait_for(locker, timeout, [this] {
+                return idle_workers >= workers.size();  // use ">=" to avoid supervisor delete workers
             });
-            task_done_workers = 0;
-            worker_state = WorkerState::Running;
+
+            worker_state = worker_state::running;
         }
         thread_cv.notify_all();  // recover
 
         std::unique_lock<std::mutex> locker(lok);
-        waiting_finished.wait(locker, [this] { return waiting_finished_worker >= workers.size(); });
-        waiting_finished_worker = 0;
+        task_resume_cv.wait(locker, [this] { return resumed_workers >= idle_workers; });
+        resumed_workers = 0;
         return res;
     }
 
@@ -139,6 +193,33 @@ public:
      */
     size_t num_tasks() {
         return tq.length();
+    }
+
+    template <typename Rep, typename Period>
+    size_t count_idle_workers(std::chrono::duration<Rep, Period> timeout) {
+        std::lock_guard<std::mutex> lock(lok);
+        size_t count = 0;
+        auto now = std::chrono::steady_clock::now();
+        for (const auto& worker_info : workers) {
+            auto& worker = worker_info.second;
+            if (worker.is_idle() &&
+                std::chrono::duration_cast<std::chrono::milliseconds>(now - worker.last_active_time) >= timeout) {
+                ++count;
+            }
+        }
+        return count;
+    }
+
+    size_t count_busy_workers() {
+        std::lock_guard<std::mutex> lock(lok);
+        size_t count = 0;
+        for (const auto& worker_info : workers) {
+            auto& worker = worker_info.second;
+            if (!worker.is_idle()) {
+                ++count;
+            }
+        }
+        return count;
     }
 
 public:
@@ -296,24 +377,93 @@ private:
      * @brief add one worker
      * @note O(logN)
      */
-    void add_worker() {
+    void add_worker(size_t num = 1) {
         std::lock_guard<std::mutex> lock(lok);
-        auto worker_id = worker_next_id.fetch_add(1);
-        workers.try_emplace(worker_id, &workbranch::mission, this, worker_id);
+        for (size_t i = 0; i < num; i++) {
+            auto worker_id = worker_next_id.fetch_add(1);
+            workers.try_emplace(worker_id, &workbranch::mission, this, worker_id);
+        }
     }
 
     /**
      * @brief delete one worker
      * @note O(1)
      */
-    void del_worker(int num = 1) {
-        std::lock_guard<std::mutex> lock(lok);
-        if (workers.empty() && workers.size() < num) {
-            throw std::runtime_error("workspace: No worker in workbranch to delete");
-        } else {
-            decline.fetch_add(num, std::memory_order_relaxed);
+    void del_worker(size_t num = 1) {
+        {
+            std::lock_guard<std::mutex> lock(lok);
+            if (workers.empty() || workers.size() < num) {
+                return;
+            }
+        }
+
+        std::unique_lock<std::mutex> lock(lok);
+        is_deleting = true;
+
+        pending_deletions += num;
+
+        if (wait_strategy == waitstrategy::blocking) {
             task_cv.notify_all();
         }
+
+        task_deletion_cv.wait(lock, [this] { return pending_deletions == 0; });
+
+        is_deleting = false;
+        thread_cv.notify_all();
+    }
+
+    void wait_for_task(int& spin_count) {
+        switch (wait_strategy) {
+            case waitstrategy::lowlatancy: {
+                std::this_thread::yield();
+                break;
+            }
+            case waitstrategy::balance: {
+                if (spin_count < max_spin_count) {
+                    ++spin_count;
+                    std::this_thread::yield();
+                } else {
+                    // Just tell the system to suspend this thread in the shortest time
+                    std::this_thread::sleep_for(std::chrono::nanoseconds(1));
+                }
+                break;
+            }
+            case waitstrategy::blocking: {
+                std::unique_lock<std::mutex> locker(lok);
+                task_cv.wait(locker, [this] {
+                    return worker_state != worker_state::running || pending_deletions > 0 || num_tasks() > 0 ||
+                           is_deleting;
+                });
+                break;
+            }
+        }
+    }
+
+    bool check_declining(worker_id id) {
+        std::lock_guard<std::mutex> lock(lok);
+        if (pending_deletions > 0) {
+            --pending_deletions;
+            workers.erase(id);
+            if (worker_state == worker_state::waiting) {
+                task_idle_cv.notify_one();
+            }
+            if (worker_state == worker_state::destructing) {
+                thread_cv.notify_one();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    void wait_resume(worker_id id) {
+        std::unique_lock<std::mutex> lock(lok);
+        idle_workers.fetch_add(1, std::memory_order_relaxed);
+        task_idle_cv.notify_one();
+
+        thread_cv.wait(lock, [this] { return worker_state != worker_state::waiting; });
+
+        resumed_workers.fetch_add(1, std::memory_order_relaxed);
+        task_resume_cv.notify_one();
     }
 
     // thread's default loop
@@ -322,74 +472,41 @@ private:
         int spin_count = 0;
 
         while (true) {
-            bool can_run = false;
-            {
-                std::lock_guard<std::mutex> lock(lok);
-
-                if (decline <= 0) {
-                    can_run = true;
-                } else if (decline > 0) {
-                    --decline;
-                    workers.erase(id);
-
-                    switch (worker_state) {
-                        case WorkerState::Waiting: {
-                            task_done_cv.notify_one();
-                            break;
-                        }
-                        case WorkerState::Destructing: {
-                            thread_cv.notify_one();
-                            break;
-                        }
-                    }
-                    return;
-                }
+            if (is_deleting && check_declining(id)) {
+                task_deletion_cv.notify_one();
+                return;
             }
 
-            if (can_run && tq.try_pop(task)) {
-                task();
-                spin_count = 0;
-                continue;
-            }
-
-            if (worker_state == WorkerState::Waiting) {
-                std::unique_lock<std::mutex> lock(lok);
-                ++task_done_workers;
-                task_done_cv.notify_one();
-
-                thread_cv.wait(lock, [this] { return worker_state != WorkerState::Waiting; });
-
-                ++waiting_finished_worker;
-                if (waiting_finished_worker >= workers.size()) {
-                    waiting_finished.notify_one();
-                }
-                continue;
-            }
-
-            switch (wait_strategy) {
-                case waitstrategy::lowlatancy: {
-                    std::this_thread::yield();
+            switch (worker_state) {
+                case worker_state::waiting:
+                    wait_resume(id);
                     break;
-                }
-                case waitstrategy::balance: {
-                    if (spin_count < max_spin_count) {
-                        ++spin_count;
-                        std::this_thread::yield();
-                    } else {
-                        // Just tell the system to suspend this thread in the shortest time
-                        std::this_thread::sleep_for(std::chrono::nanoseconds(1));
+                case worker_state::running: {
+                    {
+                        std::lock_guard<std::mutex> lock(lok);
+                        workers[id].mark_busy();
+                    }
+
+                    if (tq.try_pop(task)) {
+                        task();
+                    }
+
+
+                    {
+                        std::lock_guard<std::mutex> lock(lok);
+                        workers[id].mark_idle();
                     }
                     break;
                 }
-                case waitstrategy::blocking: {
-                    std::unique_lock<std::mutex> locker(lok);
-                    task_cv.wait(locker, [this] {
-                        return worker_state == WorkerState::Waiting || worker_state == WorkerState::Destructing ||
-                               decline > 0 || num_tasks() > 0;
-                    });
+                case worker_state::destructing:
+                    if (check_declining(id)) {
+                        return;
+                    }
                     break;
-                }
             }
+
+
+            wait_for_task(spin_count);
         }
     }
 
