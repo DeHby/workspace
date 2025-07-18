@@ -482,19 +482,18 @@ private:
                     wait_resume(id);
                     break;
                 case worker_state::running: {
-                    {
-                        std::lock_guard<std::mutex> lock(lok);
-                        workers[id].mark_busy();
-                    }
-
                     if (tq.try_pop(task)) {
+                        {
+                            std::lock_guard<std::mutex> lock(lok);
+                            workers[id].mark_busy();
+                        }
+
                         task();
-                    }
 
-
-                    {
-                        std::lock_guard<std::mutex> lock(lok);
-                        workers[id].mark_idle();
+                        {
+                            std::lock_guard<std::mutex> lock(lok);
+                            workers[id].mark_idle();
+                        }
                     }
                     break;
                 }
