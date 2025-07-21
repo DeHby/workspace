@@ -38,7 +38,7 @@ public:
                        std::chrono::milliseconds time_interval = default_time_interval)
       : branch(std::make_shared<details::workbranch>(1, strategy))
       , supervisor(std::make_unique<details::supervisor>(idle_timeout, time_interval)) {
-        supervisor->supervise(branch);
+        supervisor->supervise(branch, min_workers, max_workers);
     }
 
     /**
