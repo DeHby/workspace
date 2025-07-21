@@ -201,14 +201,17 @@ private:
                             continue;
                         }
 
-                        if (tknums) {
-                            size_t nums = std::min(limit.max - wknums, tknums - wknums);
-                            branch->add_worker(nums);  // quick add
+                        if (tknums > wknums && wknums < limit.max) {
+                            size_t nums = std::min(tknums - wknums, limit.max - wknums);
+                            if (nums > 0) {
+                                branch->add_worker(nums);
+                            }
+                        }
 
-                        } else if (wknums > limit.min) {
-                            auto size = branch->count_idle_workers(limit.idle_timeout);
-                            if (size > limit.min) {
-                                branch->del_worker(size - limit.min);  // quick dec
+                        if (!branch->worker_state.updated() && wknums > limit.min) {
+                            auto nums = branch->count_idle_workers(limit.idle_timeout);
+                            if (nums > limit.min) {
+                                branch->del_worker(nums - limit.min);
                             }
                         }
                     }
